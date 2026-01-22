@@ -114,6 +114,9 @@ st.markdown(r"<style>.stDeployButton{display:none}</style>", unsafe_allow_html=T
 
 @st.cache_resource(show_spinner=True)
 def load_model_and_cache(ref):
+    # 展开本地路径中的 ~ 符号
+    if os.path.exists(os.path.expanduser(ref)):
+        ref = os.path.expanduser(ref)
     return load(ref, {"trust_remote_code": True})
 
 

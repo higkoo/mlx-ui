@@ -5,41 +5,69 @@ import mlx.core as mx
 import streamlit as st
 from mlx_lm import load
 from mlx_lm.generate import generate_step
+from mlx_lm.sample_utils import make_sampler
 import argparse
 
-title = "MLX Chat"
-ver = "0.8"
-debug = False
+title = "智能助手"
+ver = "0.8.1"
+debug = True
 
 
 def generate(the_prompt, the_model):
     tokens = []
     skip = 0
-
-    for (token, prob), n in zip(generate_step(mx.array(tokenizer.encode(the_prompt)), the_model),
-                                range(context_length)):
-
-        if token == tokenizer.eos_token_id:
-            break
-
+    count = 0
+    
+    # 简化的重复检测：只检测连续的完全重复
+    last_complete_response = ""
+    repeat_count = 0
+    max_repeats = 2
+    
+    # 编码提示
+    input_ids = mx.array(tokenizer.encode(the_prompt))
+    
+    # 创建采样器，设置用户要求的参数
+    # 参数说明：
+    # - temp: 温度参数，控制生成的随机性，0.6 是一个平衡值
+    # - top_p: 核采样参数，控制生成的多样性，0.95 保留 95% 的概率质量
+    # - top_k: 保留概率最高的 k 个 token，20 是一个适中值
+    # - min_p: 最小概率阈值，0 表示不使用此功能
+    # - min_tokens_to_keep: 最小保留的 token 数，使用默认值 1
+    sampler = make_sampler(
+        temp=0.6,
+        top_p=0.95,
+        min_p=0,
+        min_tokens_to_keep=1,
+        top_k=20,
+        xtc_probability=0.0,
+        xtc_threshold=0.0,
+        xtc_special_tokens=[]
+    )
+    
+    # 开始生成，传递采样器
+    gen = generate_step(
+        input_ids, 
+        the_model, 
+        sampler=sampler,
+        max_tokens=context_length  # 设置最大生成的 token 数
+    )
+    
+    # 循环生成，直到生成器停止或达到最大 token 数
+    for token, prob in gen:
         tokens.append(token)
         text = tokenizer.decode(tokens)
-
-        trim = None
-
-        for sw in stop_words:
-            if text[-len(sw):].lower() == sw:
-                # definitely ends with a stop word. stop generating
-                return
-            else:
-                # if text ends with start of an end word, accumulate tokens and wait for the full word
-                for i, _ in enumerate(sw, start=1):
-                    if text[-i:].lower() == sw[:i]:
-                        trim = -i
-
-        # flush text up till trim point (beginning of stop word)
-        yield text[skip:trim]
+        current_chunk = text[skip:]
+        
+        # 输出当前生成的文本
+        yield current_chunk
+        
+        # 更新偏移量和计数
         skip = len(text)
+        count += 1
+        
+        # 检查是否达到最大 token 数
+        if count >= context_length:
+            break
 
 
 def show_chat(the_prompt, previous=""):
@@ -51,6 +79,7 @@ def show_chat(the_prompt, previous=""):
         message_placeholder = st.empty()
         response = previous
 
+        # 生成并显示内容
         for chunk in generate(the_prompt, model):
             response = response + chunk
 
@@ -60,12 +89,42 @@ def show_chat(the_prompt, previous=""):
                 response = re.sub(r"^:+", "", response)
                 # end neural-beagle-14 fixes
 
+            # 移除所有不需要的标签
+            response = re.sub(r"<think>", "", response)
+            response = re.sub(r"</think>", "", response)
+            response = re.sub(r"<\|im_start\|>", "", response)
+            response = re.sub(r"<\|im_end\|>", "", response)
+            response = re.sub(r"<\|endoftext\|>", "", response)
+            response = re.sub(r"<s>", "", response)
+            response = re.sub(r"</s>", "", response)
+            
+            # 移除重复的 "Human:" 标记
+            response = re.sub(r"Human:", "", response)
+            
+            # 移除多余的空行
+            response = re.sub(r"\n{3,}", "\n\n", response)
+            
+            # 移除特殊字符
             response = response.replace('�', '')
+            
+            # 实时显示生成的内容
             message_placeholder.markdown(response + "▌")
 
-        message_placeholder.markdown(response)
+        # 生成完成后，清理最终内容
+        # 1. 移除多余的空行
+        final_response = re.sub(r"\n{3,}", "\n\n", response)
+        
+        # 2. 确保内容格式正确
+        final_response = final_response.strip()
+        
+        # 3. 显示最终清理后的内容
+        message_placeholder.markdown(final_response)
 
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # 将最终内容添加到会话状态
+    st.session_state.messages.append({"role": "assistant", "content": final_response})
+    
+    # 移除自动继续生成逻辑，改为通过调整生成参数来避免中途停止
+    # 这样可以避免重复内容问题
 
 
 def remove_last_occurrence(array, criteria_fn):
@@ -76,8 +135,11 @@ def remove_last_occurrence(array, criteria_fn):
 
 
 def build_memory():
+    # 限制对话历史的长度，只保留最近的 5 条消息
+    max_history_length = 5
     if len(st.session_state.messages) > 2:
-        return st.session_state.messages[1:-1]
+        # 保留最近的 max_history_length 条消息
+        return st.session_state.messages[max(1, len(st.session_state.messages) - max_history_length):-1]
     return []
 
 
@@ -94,7 +156,7 @@ parser.add_argument("--models", type=str, help="the txt file that contains the m
 args = parser.parse_args()
 models_file = args.models
 
-assistant_greeting = "How may I help you?"
+assistant_greeting = "我能为您提供什么帮助？"
 
 with open(models_file, 'r') as file:
     model_refs = [line.strip() for line in file.readlines() if not line.startswith('#')]
@@ -109,8 +171,37 @@ st.set_page_config(
 )
 st.title(title)
 
-st.markdown(r"<style>.stDeployButton{display:none}</style>", unsafe_allow_html=True)
+st.markdown("""
+<style>
+.stDeployButton{display:none}
+/* 修改运行状态文本为中文 */
+[data-testid='stStatusWidget'] {
+    position: relative;
+}
+[data-testid='stStatusWidget'] span,
+[data-testid='stStatusWidget'] div {
+    display: none !important;
+}
+[data-testid='stStatusWidget']::before {
+    content: '运行中...';
+    display: inline-block;
+    margin-right: 10px;
+}
+[data-testid='stStatusWidget'] button {
+    font-size: 14px !important;
+}
+[data-testid='stStatusWidget'] button span {
+    display: none !important;
+}
+[data-testid='stStatusWidget'] button::after {
+    content: '停止';
+    display: inline-block;
+}
+</style>
+""", unsafe_allow_html=True)
 
+
+import os
 
 @st.cache_resource(show_spinner=True)
 def load_model_and_cache(ref):
@@ -122,9 +213,8 @@ def load_model_and_cache(ref):
 
 model = None
 
-model_ref = st.sidebar.selectbox("model", model_refs.keys(), format_func=lambda value: model_refs[value],
-                                 help="See https://huggingface.co/mlx-community for more models. Add your favorites "
-                                      "to models.txt")
+model_ref = st.sidebar.selectbox("模型", model_refs.keys(), format_func=lambda value: model_refs[value],
+                                 help="查看 https://modelscope.cn 获取更多模型。将您喜欢的模型添加到 models.txt 文件中。")
 
 if model_ref.strip() != "-":
     model, tokenizer = load_model_and_cache(model_ref)
@@ -139,12 +229,11 @@ if model_ref.strip() != "-":
     )
     supports_system_role = "system role not supported" not in chat_template.lower()
 
-    system_prompt = st.sidebar.text_area("system prompt", "You are a helpful AI assistant trained on a vast amount of "
-                                                          "human knowledge. Answer as concisely as possible.",
+    system_prompt = st.sidebar.text_area("系统提示", "你是一位智慧的AI助手，基于大量人类知识训练而成。在回答问题时，请直接给出最终答案，不需要使用任何特殊标签或标记。回答要简洁明了，直接针对问题。重要：不要重复之前的内容，不要重复相同的段落或句子。",
                                          disabled=not supports_system_role)
 
-    context_length = st.sidebar.number_input('context length', value=400, min_value=100, step=100, max_value=32000,
-                                             help="how many maximum words to print, roughly")
+    context_length = st.sidebar.number_input('上下文长度', value=2048, min_value=99, step=100, max_value=32000,
+                                             help="大致打印的最大单词数。")
 
     st.sidebar.markdown("---")
     actions = st.sidebar.columns(2)
@@ -157,16 +246,16 @@ if model_ref.strip() != "-":
 
     stop_words = ["<|im_start|>", "<|im_end|>", "<s>", "</s>"]
 
-    if actions[0].button("😶‍🌫️ Forget", use_container_width=True,
-                         help="Forget the previous conversations."):
+    if actions[0].button("😶‍🌫️ 清空", use_container_width=True,
+                         help="清空之前的对话。"):
         st.session_state.messages = [{"role": "assistant", "content": assistant_greeting}]
         if "prompt" in st.session_state and st.session_state["prompt"]:
             st.session_state["prompt"] = None
             st.session_state["continuation"] = None
         st.rerun()
 
-    if actions[1].button("🔂 Continue", use_container_width=True,
-                         help="Continue the generation."):
+    if actions[1].button("🔂 继续", use_container_width=True,
+                         help="继续生成。"):
 
         user_prompts = [msg["content"] for msg in st.session_state.messages if msg["role"] == "user"]
 
@@ -203,7 +292,7 @@ if model_ref.strip() != "-":
 
             queue_chat(full_prompt, last_assistant_response)
 
-    if prompt := st.chat_input():
+    if prompt := st.chat_input("聊点什么..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
 
         messages = []
@@ -230,4 +319,4 @@ if model_ref.strip() != "-":
         st.session_state["continuation"] = None
 
 st.sidebar.markdown("---")
-st.sidebar.markdown(f"v{ver} / st {st.__version__}")
+st.sidebar.markdown(f"版本 v{ver} / Streamlit {st.__version__}")

@@ -1,37 +1,37 @@
 # MLX Chat
 
-A simple UI / Web / Frontend for MLX mlx-lm using Streamlit.
+一个使用 Streamlit 为 MLX mlx-lm 开发的简单 UI / Web / 前端界面。
 
 ![](screenshot.png)
 
-## Install
+## 安装
 
 ```shell
 $ ./install.sh
 ```
 
-Or to install using latest versions of the libs (may break functionality):
+或者使用最新版本的库进行安装（可能会破坏功能）：
 
 ```shell
 $ ./install.sh refresh
 ```
 
-## Update
+## 更新
 
-After fetching a newer version it's recommended to run again the installation script.
+获取更新版本后，建议再次运行安装脚本。
 
 ```shell
 $ ./install.sh
 ```
 
-## Run
+## 运行
 
 ```shell
 $ ./run.sh
 ```
 
-You can also use a custom model.txt file (see [mlx-community](https://huggingface.co/mlx-community) for more models):
+您还可以使用自定义的 model.txt 文件（查看 [modelscope.cn](https://modelscope.cn) 获取更多模型）：
 
 ```shell
-$ ./run.sh --models mymodels.txt
+$ ./run.sh --port 2333 --address 192.168.1.100 --models models.txt
 ```
